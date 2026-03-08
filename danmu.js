@@ -1,48 +1,54 @@
 WidgetMetadata = {
-  id: "danmu_api_Max_binfa",
-  title: "并发弹幕",
-  version: "1.2.9",
+  id: "danmu_api_enhanced",
+  title: "弹幕增强版",
+  version: "2.0.0",
   requiredVersion: "0.0.2",
   site: "https://t.me/MakkaPakkaOvO",
-  description: "并发搜索、多源弹幕、繁简转换、数量限制、屏蔽词、颜色重写、固定弹幕",
-  author: "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖",
+  description: "并发搜索、多源弹幕、高潮弹幕固定、密度控制、颜色增强",
+  author: "Enhanced",
 
   globalParams: [
-    { name: "server", title: "源1 (必填)", type: "input", value: "" },
+    { name: "server", title: "源1", type: "input" },
     { name: "server2", title: "源2", type: "input" },
     { name: "server3", title: "源3", type: "input" },
 
     {
       name: "maxCount",
-      title: "📊 弹幕数量上限",
+      title: "弹幕数量上限",
       type: "input",
       value: "3000"
     },
 
     {
-      name: "topDanmuRate",
-      title: "📌 固定弹幕比例(%)",
+      name: "topRate",
+      title: "固定弹幕比例(%)",
       type: "input",
-      value: "0"
+      value: "5"
+    },
+
+    {
+      name: "density",
+      title: "弹幕密度(%)",
+      type: "input",
+      value: "100"
     },
 
     {
       name: "blockKeywords",
-      title: "🚫 弹幕屏蔽词",
+      title: "弹幕屏蔽词",
       type: "input",
       value: ""
     },
 
     {
       name: "colorMode",
-      title: "🎨 弹幕颜色",
+      title: "弹幕颜色模式",
       type: "enumeration",
       value: "none",
       enumOptions: [
         { title: "保持原样", value: "none" },
-        { title: "全部白色", value: "white" },
-        { title: "部分彩色", value: "partial" },
-        { title: "完全彩色", value: "all" }
+        { title: "白色", value: "white" },
+        { title: "随机彩色", value: "all" }
       ]
     }
   ],
@@ -60,14 +66,12 @@ async function getSource(id) {
   try {
     let map = await Widget.storage.get(SOURCE_KEY);
     return map ? JSON.parse(map)[id] : null;
-  } catch (e) {
+  } catch(e) {
     return null;
   }
 }
 
 async function searchDanmu(params) {
-
-  const { title } = params;
 
   const servers = [params.server, params.server2, params.server3]
     .filter(s => s && s.startsWith("http"))
@@ -77,20 +81,20 @@ async function searchDanmu(params) {
 
   let finalAnimes = [];
   let mapEntries = {};
-  let seenIds = new Set();
+  let seen = new Set();
 
-  const tasks = servers.map(async (server) => {
+  const tasks = servers.map(async server => {
 
     try {
 
-      const res = await Widget.http.get(`${server}/api/v2/search/anime?keyword=${title}`);
+      const res = await Widget.http.get(`${server}/api/v2/search/anime?keyword=${params.title}`);
       const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
 
       if (data?.animes) {
         return { server, animes: data.animes };
       }
 
-    } catch (e) {}
+    } catch(e) {}
 
     return null;
 
@@ -104,9 +108,9 @@ async function searchDanmu(params) {
 
     for (const a of r.animes) {
 
-      if (!seenIds.has(a.animeId)) {
+      if (!seen.has(a.animeId)) {
 
-        seenIds.add(a.animeId);
+        seen.add(a.animeId);
         finalAnimes.push(a);
         mapEntries[a.animeId] = r.server;
 
@@ -125,7 +129,7 @@ async function searchDanmu(params) {
 
     await Widget.storage.set(SOURCE_KEY, JSON.stringify(map));
 
-  } catch (e) {}
+  } catch(e) {}
 
   return { animes: finalAnimes };
 
@@ -156,7 +160,7 @@ async function getDetailById(params) {
 
     }
 
-  } catch (e) {}
+  } catch(e) {}
 
   return [];
 
@@ -164,7 +168,7 @@ async function getDetailById(params) {
 
 async function getCommentsById(params) {
 
-  const { commentId, blockKeywords, colorMode, maxCount, topDanmuRate } = params;
+  const { commentId, blockKeywords, colorMode, maxCount, topRate, density } = params;
 
   if (!commentId) return null;
 
@@ -177,18 +181,18 @@ async function getCommentsById(params) {
 
     let list = data.comments || [];
 
-    const blockedList = blockKeywords
-      ? blockKeywords.split(/[,，]/).map(k => k.trim()).filter(k => k.length > 0)
+    const blocked = blockKeywords
+      ? blockKeywords.split(/[,，]/).map(k => k.trim()).filter(Boolean)
       : [];
 
-    if (blockedList.length > 0) {
+    if (blocked.length) {
 
       list = list.filter(c => {
 
         const msg = c.m || c.message || "";
 
-        for (const keyword of blockedList) {
-          if (msg.includes(keyword)) return false;
+        for (const k of blocked) {
+          if (msg.includes(k)) return false;
         }
 
         return true;
@@ -197,20 +201,54 @@ async function getCommentsById(params) {
 
     }
 
+    let densityRate = parseInt(density);
+
+    if (!isNaN(densityRate) && densityRate < 100) {
+
+      list = list.filter(() => Math.random() < densityRate / 100);
+
+    }
+
     let limit = parseInt(maxCount);
 
     if (!isNaN(limit) && limit > 0 && list.length > limit) {
 
-      for (let i = list.length - 1; i > 0; i--) {
-
-        const j = Math.floor(Math.random() * (i + 1));
-        [list[i], list[j]] = [list[j], list[i]];
-
-      }
-
       list = list.slice(0, limit);
 
     }
+
+    const highlightWords = [
+      "卧槽","来了","名场面","前方高能","泪目","哈哈哈"
+    ];
+
+    let fixedRate = parseInt(topRate);
+
+    list.forEach(c => {
+
+      if (!c.p) return;
+
+      let parts = c.p.split(",");
+
+      if (parts.length < 2) return;
+
+      const text = c.m || "";
+
+      if (highlightWords.some(w => text.includes(w))) {
+
+        parts[1] = "4";
+        c.p = parts.join(",");
+        return;
+
+      }
+
+      if (!isNaN(fixedRate) && parts[1] === "1" && Math.random() < fixedRate/100) {
+
+        parts[1] = "4";
+        c.p = parts.join(",");
+
+      }
+
+    });
 
     if (colorMode !== "none") {
 
@@ -228,12 +266,6 @@ async function getCommentsById(params) {
           parts[3] = "16777215";
         }
 
-        if (colorMode === "partial") {
-          if (Math.random() < 0.5) {
-            parts[3] = COLORS[Math.floor(Math.random()*COLORS.length)];
-          }
-        }
-
         if (colorMode === "all") {
           parts[3] = COLORS[Math.floor(Math.random()*COLORS.length)];
         }
@@ -244,34 +276,11 @@ async function getCommentsById(params) {
 
     }
 
-    let rate = parseInt(topDanmuRate);
-
-    if (!isNaN(rate) && rate > 0) {
-
-      list.forEach(c => {
-
-        if (!c.p) return;
-
-        let parts = c.p.split(",");
-
-        if (parts.length < 2) return;
-
-        if (parts[1] === "1" && Math.random() < rate/100) {
-
-          parts[1] = "4";
-          c.p = parts.join(",");
-
-        }
-
-      });
-
-    }
-
     data.comments = list;
 
     return data;
 
-  } catch (e) {
+  } catch(e) {
 
     return null;
 
