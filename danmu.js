@@ -1,27 +1,20 @@
 WidgetMetadata = {
-  id: "danmu_api_enhanced",
-  title: "弹幕增强版",
-  version: "2.0.0",
+  id: "danmu_api_top_only",
+  title: "弹幕终极版(仅顶部)",
+  version: "3.0.0",
   requiredVersion: "0.0.2",
-  site: "https://t.me/MakkaPakkaOvO",
-  description: "并发搜索、多源弹幕、高潮弹幕固定、密度控制、颜色增强",
+  description: "多源弹幕 + 顶部弹幕 + 密度控制",
   author: "Enhanced",
 
   globalParams: [
-    { name: "server", title: "源1", type: "input" },
-    { name: "server2", title: "源2", type: "input" },
-    { name: "server3", title: "源3", type: "input" },
 
-    {
-      name: "maxCount",
-      title: "弹幕数量上限",
-      type: "input",
-      value: "3000"
-    },
+    { name: "server", title: "弹幕源1", type: "input" },
+    { name: "server2", title: "弹幕源2", type: "input" },
+    { name: "server3", title: "弹幕源3", type: "input" },
 
     {
       name: "topRate",
-      title: "固定弹幕比例(%)",
+      title: "顶部弹幕比例(%)",
       type: "input",
       value: "5"
     },
@@ -34,23 +27,31 @@ WidgetMetadata = {
     },
 
     {
+      name: "maxCount",
+      title: "弹幕数量上限",
+      type: "input",
+      value: "3000"
+    },
+
+    {
       name: "blockKeywords",
-      title: "弹幕屏蔽词",
+      title: "屏蔽词",
       type: "input",
       value: ""
     },
 
     {
       name: "colorMode",
-      title: "弹幕颜色模式",
+      title: "弹幕颜色",
       type: "enumeration",
       value: "none",
       enumOptions: [
         { title: "保持原样", value: "none" },
-        { title: "白色", value: "white" },
+        { title: "纯白", value: "white" },
         { title: "随机彩色", value: "all" }
       ]
     }
+
   ],
 
   modules: [
@@ -62,228 +63,206 @@ WidgetMetadata = {
 
 const SOURCE_KEY = "dm_source_map";
 
-async function getSource(id) {
-  try {
+async function getSource(id){
+  try{
     let map = await Widget.storage.get(SOURCE_KEY);
     return map ? JSON.parse(map)[id] : null;
-  } catch(e) {
-    return null;
-  }
+  }catch(e){return null;}
 }
 
-async function searchDanmu(params) {
+async function searchDanmu(params){
 
-  const servers = [params.server, params.server2, params.server3]
-    .filter(s => s && s.startsWith("http"))
-    .map(s => s.replace(/\/$/, ""));
+  const servers=[params.server,params.server2,params.server3]
+  .filter(s=>s&&s.startsWith("http"))
+  .map(s=>s.replace(/\/$/,""));
 
-  if (!servers.length) return { animes: [] };
+  if(!servers.length)return{animes:[]};
 
-  let finalAnimes = [];
-  let mapEntries = {};
-  let seen = new Set();
+  let final=[];
+  let mapEntries={};
+  let seen=new Set();
 
-  const tasks = servers.map(async server => {
+  const tasks=servers.map(async server=>{
+    try{
+      const res=await Widget.http.get(`${server}/api/v2/search/anime?keyword=${params.title}`);
+      const data=typeof res.data==="string"?JSON.parse(res.data):res.data;
 
-    try {
-
-      const res = await Widget.http.get(`${server}/api/v2/search/anime?keyword=${params.title}`);
-      const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
-
-      if (data?.animes) {
-        return { server, animes: data.animes };
+      if(data?.animes){
+        return{server,animes:data.animes};
       }
-
-    } catch(e) {}
-
+    }catch(e){}
     return null;
-
   });
 
-  const results = await Promise.all(tasks);
+  const results=await Promise.all(tasks);
 
-  for (const r of results) {
+  for(const r of results){
+    if(!r)continue;
 
-    if (!r) continue;
-
-    for (const a of r.animes) {
-
-      if (!seen.has(a.animeId)) {
-
+    for(const a of r.animes){
+      if(!seen.has(a.animeId)){
         seen.add(a.animeId);
-        finalAnimes.push(a);
-        mapEntries[a.animeId] = r.server;
-
+        final.push(a);
+        mapEntries[a.animeId]=r.server;
       }
-
     }
-
   }
 
-  try {
+  try{
+    let mapStr=await Widget.storage.get(SOURCE_KEY);
+    let map=mapStr?JSON.parse(mapStr):{};
+    Object.assign(map,mapEntries);
+    await Widget.storage.set(SOURCE_KEY,JSON.stringify(map));
+  }catch(e){}
 
-    let mapStr = await Widget.storage.get(SOURCE_KEY);
-    let map = mapStr ? JSON.parse(mapStr) : {};
-
-    Object.assign(map, mapEntries);
-
-    await Widget.storage.set(SOURCE_KEY, JSON.stringify(map));
-
-  } catch(e) {}
-
-  return { animes: finalAnimes };
-
+  return{animes:final};
 }
 
-async function getDetailById(params) {
+async function getDetailById(params){
 
-  const { animeId } = params;
-  let server = (await getSource(animeId)) || params.server;
+  const{animeId}=params;
+  let server=(await getSource(animeId))||params.server;
 
-  try {
+  try{
+    const res=await Widget.http.get(`${server}/api/v2/bangumi/${animeId}`);
+    const data=typeof res.data==="string"?JSON.parse(res.data):res.data;
 
-    const res = await Widget.http.get(`${server}/api/v2/bangumi/${animeId}`);
-    const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+    if(data?.bangumi?.episodes){
 
-    if (data?.bangumi?.episodes) {
+      let mapStr=await Widget.storage.get(SOURCE_KEY);
+      let map=mapStr?JSON.parse(mapStr):{};
 
-      let mapStr = await Widget.storage.get(SOURCE_KEY);
-      let map = mapStr ? JSON.parse(mapStr) : {};
-
-      for (const ep of data.bangumi.episodes) {
-        map[ep.episodeId] = server;
+      for(const ep of data.bangumi.episodes){
+        map[ep.episodeId]=server;
       }
 
-      await Widget.storage.set(SOURCE_KEY, JSON.stringify(map));
+      await Widget.storage.set(SOURCE_KEY,JSON.stringify(map));
 
       return data.bangumi.episodes;
-
     }
 
-  } catch(e) {}
+  }catch(e){}
 
-  return [];
-
+  return[];
 }
 
-async function getCommentsById(params) {
+async function getCommentsById(params){
 
-  const { commentId, blockKeywords, colorMode, maxCount, topRate, density } = params;
+  const{commentId,blockKeywords,colorMode,maxCount,topRate,density}=params;
 
-  if (!commentId) return null;
+  if(!commentId)return null;
 
-  let server = (await getSource(commentId)) || params.server;
+  let server=(await getSource(commentId))||params.server;
 
-  try {
+  try{
 
-    const res = await Widget.http.get(`${server}/api/v2/comment/${commentId}`);
-    const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+    const res=await Widget.http.get(`${server}/api/v2/comment/${commentId}`);
+    const data=typeof res.data==="string"?JSON.parse(res.data):res.data;
 
-    let list = data.comments || [];
+    let list=data.comments||[];
 
-    const blocked = blockKeywords
-      ? blockKeywords.split(/[,，]/).map(k => k.trim()).filter(Boolean)
-      : [];
+    const blocked=blockKeywords
+    ?blockKeywords.split(/[,，]/).map(k=>k.trim()).filter(Boolean)
+    :[];
 
-    if (blocked.length) {
-
-      list = list.filter(c => {
-
-        const msg = c.m || c.message || "";
-
-        for (const k of blocked) {
-          if (msg.includes(k)) return false;
+    if(blocked.length){
+      list=list.filter(c=>{
+        const msg=c.m||c.message||"";
+        for(const k of blocked){
+          if(msg.includes(k))return false;
         }
-
         return true;
-
       });
-
     }
 
-    let densityRate = parseInt(density);
+    let densityRate=parseInt(density);
 
-    if (!isNaN(densityRate) && densityRate < 100) {
-
-      list = list.filter(() => Math.random() < densityRate / 100);
-
+    if(!isNaN(densityRate)&&densityRate<100){
+      list=list.filter(()=>Math.random()<densityRate/100);
     }
 
-    let limit = parseInt(maxCount);
+    let limit=parseInt(maxCount);
 
-    if (!isNaN(limit) && limit > 0 && list.length > limit) {
-
-      list = list.slice(0, limit);
-
+    if(!isNaN(limit)&&limit>0&&list.length>limit){
+      list=list.slice(0,limit);
     }
 
-    const highlightWords = [
-      "卧槽","来了","名场面","前方高能","泪目","哈哈哈"
+    const highlight=[
+      "卧槽","来了","名场面","前方高能","哈哈哈","泪目"
     ];
 
-    let fixedRate = parseInt(topRate);
+    let rate=parseInt(topRate);
 
-    list.forEach(c => {
+    let offset=0;
 
-      if (!c.p) return;
+    list.forEach(c=>{
 
-      let parts = c.p.split(",");
+      if(!c.p)return;
 
-      if (parts.length < 2) return;
+      let parts=c.p.split(",");
 
-      const text = c.m || "";
+      if(parts.length<2)return;
 
-      if (highlightWords.some(w => text.includes(w))) {
+      const text=c.m||"";
 
-        parts[1] = "4";
-        c.p = parts.join(",");
-        return;
+      let makeTop=false;
+
+      if(highlight.some(w=>text.includes(w))){
+        makeTop=true;
+      }
+
+      if(!makeTop&&!isNaN(rate)&&Math.random()<rate/100){
+        makeTop=true;
+      }
+
+      if(makeTop){
+
+        parts[1]="4";
+
+        let t=parseFloat(parts[0])||0;
+        t+=offset;
+
+        parts[0]=t.toFixed(2);
+
+        offset+=0.01;
 
       }
 
-      if (!isNaN(fixedRate) && parts[1] === "1" && Math.random() < fixedRate/100) {
-
-        parts[1] = "4";
-        c.p = parts.join(",");
-
-      }
+      c.p=parts.join(",");
 
     });
 
-    if (colorMode !== "none") {
+    if(colorMode!=="none"){
 
-      const COLORS = [16711680,16776960,65280,65535,16711935];
+      const COLORS=[16711680,16776960,65280,65535,16711935];
 
-      list.forEach(c => {
+      list.forEach(c=>{
 
-        if (!c.p) return;
+        if(!c.p)return;
 
-        let parts = c.p.split(",");
+        let parts=c.p.split(",");
 
-        if (parts.length < 4) return;
+        if(parts.length<4)return;
 
-        if (colorMode === "white") {
-          parts[3] = "16777215";
+        if(colorMode==="white"){
+          parts[3]="16777215";
         }
 
-        if (colorMode === "all") {
-          parts[3] = COLORS[Math.floor(Math.random()*COLORS.length)];
+        if(colorMode==="all"){
+          parts[3]=COLORS[Math.floor(Math.random()*COLORS.length)];
         }
 
-        c.p = parts.join(",");
+        c.p=parts.join(",");
 
       });
 
     }
 
-    data.comments = list;
+    data.comments=list;
 
     return data;
 
-  } catch(e) {
-
+  }catch(e){
     return null;
-
   }
-
 }
