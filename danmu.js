@@ -1,310 +1,377 @@
 WidgetMetadata = {
-  id: "danmu_api_ultimate_v4_6",
-  title: "终极并发弹幕 v4.6",
-  version: "4.6.0",
+  id: "danmu_api_Max_binfa",
+  title: "并发弹幕",
+  version: "1.2.7", // 并发测试版：基于稳定的1.2.6，仅将请求方式改回并发，测试引擎极限
   requiredVersion: "0.0.2",
-  description: "多API并发 + AI高能弹幕 + 延迟校准 + 智能轨道调度 + 居中弹幕密度控制",
-  author: "AI Ultimate",
-
+  site: "https://t.me/MakkaPakkaOvO",
+  description: "并发搜索多api、繁简互转、数量限制、关键词屏蔽、颜色重写",
+  author: "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖",
+  
   globalParams: [
-    { name:"server",title:"源1(必填)",type:"input",value:"" },
-    { name:"server2",title:"源2",type:"input" },
-    { name:"server3",title:"源3",type:"input" },
-    { name:"maxCount",title:"📊弹幕数量上限",type:"input",value:"3000" },
-    {
-      name:"convertMode",
-      title:"🔠繁简转换",
-      type:"enumeration",
-      value:"none",
-      enumOptions:[
-        {title:"保持原样",value:"none"},
-        {title:"转简体",value:"t2s"},
-        {title:"转繁体",value:"s2t"}
-      ]
-    },
-    {
-      name:"colorMode",
-      title:"🎨弹幕颜色",
-      type:"enumeration",
-      value:"none",
-      enumOptions:[
-        {title:"保持原样",value:"none"},
-        {title:"全部纯白",value:"white"},
-        {title:"部分彩色",value:"partial"},
-        {title:"完全彩色",value:"all"}
-      ]
-    },
-    { name:"blockKeywords",title:"🚫弹幕屏蔽词",type:"input",value:"" }
+      { name: "server", title: "源1 (必填)", type: "input", value: "请填入你的弹幕api" },
+      { name: "server2", title: "源2", type: "input" },
+      { name: "server3", title: "源3", type: "input" },
+      { 
+          name: "maxCount", 
+          title: "📊 弹幕数量上限", 
+          type: "input", 
+          value: "3000",
+          description: "填0或留空不限制。超出则按时间全段等比例随机剔除" 
+      },
+      { 
+          name: "searchBlockKeywords", 
+          title: "👁️ 搜索结果屏蔽词 (逗号分隔)", 
+          type: "input", 
+          value: "",
+          description: "屏蔽不想看到的搜索结果，如: 动态漫,电视剧,漫画" 
+      },
+      { 
+          name: "convertMode", 
+          title: "🔠 弹幕转换", 
+          type: "enumeration", 
+          value: "none",
+          enumOptions: [
+              { title: "保持原样", value: "none" },
+              { title: "转简体 (繁->简)", value: "t2s" },
+              { title: "转繁体 (简->繁)", value: "s2t" }
+          ]
+      },
+      { 
+          name: "colorMode", 
+          title: "🎨 弹幕颜色", 
+          type: "enumeration", 
+          value: "none",
+          enumOptions: [
+              { title: "保持原样", value: "none" },
+              { title: "全部纯白", value: "white" },
+              { title: "部分彩色 (50%彩色)", value: "partial" },
+              { title: "完全彩色 (100%彩色)", value: "all" }
+          ]
+      },
+      { 
+          name: "blockKeywords", 
+          title: "🚫 弹幕内容屏蔽词 (逗号分隔)", 
+          type: "input", 
+          value: "" 
+      }
   ],
-
-  modules:[
-    { id:"searchDanmu",title:"搜索",functionName:"searchDanmu",type:"danmu" },
-    { id:"getDetail",title:"详情",functionName:"getDetailById",type:"danmu" },
-    { id:"getComments",title:"弹幕",functionName:"getCommentsById",type:"danmu" }
+  modules: [
+      { id: "searchDanmu", title: "搜索", functionName: "searchDanmu", type: "danmu", params: [] },
+      { id: "getDetail", title: "详情", functionName: "getDetailById", type: "danmu", params: [] },
+      { id: "getComments", title: "弹幕", functionName: "getCommentsById", type: "danmu", params: [] }
   ]
-}
+};
 
-// =======================
-// 来源记录
-// =======================
-const SOURCE_KEY="dm_source_map"
-async function getSource(id){
-  try{
-    let map=await Widget.storage.get(SOURCE_KEY)
-    return map?JSON.parse(map)[id]:null
-  }catch(e){return null}
-}
+// ==========================================
+// 1. 繁简转换核心
+// ==========================================
+const DICT_URL_S2T = "https://cdn.jsdelivr.net/npm/opencc-data@1.0.3/data/STCharacters.txt";
+const DICT_URL_T2S = "https://cdn.jsdelivr.net/npm/opencc-data@1.0.3/data/TSCharacters.txt";
+let MEM_DICT = null;
 
-// =======================
-// AI配置
-// =======================
-const AI_CONFIG={
-  highEnergyChance:0.15,
-  centerMode:"5",
-  bigFont:"36",
-  colors:["16711680","16776960","16744192","13445375"],
-  words:["卧槽","牛逼","神回","泪目","高能","封神","名场面","绝了","燃爆","神作"],
-  spam:["加微信","VX","福利","资源","看片","广告","代理"]
-}
-
-// =======================
-// AI弹幕
-// =======================
-function processAI(list){
-  return list.filter(c=>{
-    let msg=(c.m||c.message||"").trim()
-    if(!msg) return false
-    for(let s of AI_CONFIG.spam) if(msg.includes(s)) return false
-    if(!c.p) return true
-    let p=c.p.split(',')
-    for(let w of AI_CONFIG.words){
-      if(msg.includes(w)&&Math.random()<AI_CONFIG.highEnergyChance){
-        p[1]=AI_CONFIG.centerMode
-        p[2]=AI_CONFIG.bigFont
-        p[3]=AI_CONFIG.colors[Math.floor(Math.random()*AI_CONFIG.colors.length)]
-        c.p=p.join(',')
-        break
-      }
-    }
-    return true
-  })
-}
-
-// =======================
-// 名场面增强
-// =======================
-function boostClimax(list){
-  let map={}
-  list.forEach(c=>{
-    if(!c.p) return
-    let t=Math.floor(parseFloat(c.p.split(',')[0])||0)
-    map[t]=(map[t]||0)+1
-  })
-  list.forEach(c=>{
-    if(!c.p) return
-    let p=c.p.split(',')
-    let t=Math.floor(parseFloat(p[0])||0)
-    if(map[t]>8){
-      p[1]="5"
-      p[2]="38"
-      c.p=p.join(',')
-    }
-  })
-}
-
-// =======================
-// 弹幕延迟校准
-// =======================
-function autoSyncDanmu(list){
-  if(!list||list.length<50) return list
-  let buckets={}
-  list.forEach(c=>{
-    if(!c.p) return
-    let t=parseFloat(c.p.split(',')[0])
-    if(isNaN(t)) return
-    let key=Math.round(t)
-    buckets[key]=(buckets[key]||0)+1
-  })
-  let max=0, peak=0
-  for(let k in buckets){
-    if(buckets[k]>max){ max=buckets[k]; peak=parseInt(k) }
-  }
-  let offset=0
-  if(peak<5) offset=2
-  if(peak>20) offset=-2
-  if(offset!==0){
-    list.forEach(c=>{
-      if(!c.p) return
-      let p=c.p.split(',')
-      let t=parseFloat(p[0])+offset
-      if(t<0) t=0
-      p[0]=t.toFixed(2)
-      c.p=p.join(',')
-    })
-  }
-  return list
-}
-
-// =======================
-// 居中弹幕队列
-// =======================
-let centerQueue = []
-let centerShowing = false
-const CENTER_DURATION = 3   // 居中弹幕停留时间
-const CENTER_INTERVAL = 2   // 居中弹幕最小间隔（控制密度）
-let lastCenterTime = 0      // 上一条居中弹幕显示时间
-
-function scheduleCenterDanmu(list){
-  const newCenter = []
-  list.forEach(c=>{
-    if(!c.p) return
-    let p=c.p.split(',')
-    if(p[1]==="4"||p[1]==="5") newCenter.push(c)
-  })
-  // 控制密度，加入队列
-  newCenter.forEach(c=>centerQueue.push(c))
-  return list.filter(c=>{
-    let p=c.p.split(',')
-    return !(p[1]==="4"||p[1]==="5")
-  })
-}
-
-async function showNextCenterDanmu(){
-  if(centerQueue.length===0) return
-  const now = Date.now()/1000
-  if(now - lastCenterTime < CENTER_INTERVAL){
-    await sleep((CENTER_INTERVAL - (now - lastCenterTime))*1000)
-  }
-  const c = centerQueue.shift()
-  lastCenterTime = Date.now()/1000
-  displayDanmu(c) // 渲染函数
-  await sleep(CENTER_DURATION*1000)
-  showNextCenterDanmu()
-}
-
-function sleep(ms){ return new Promise(res=>setTimeout(res, ms)) }
-
-// =======================
-// 滚动弹幕轨道调度
-// =======================
-function scheduleScrollDanmu(list){
-  const scrollTracks = 10
-  let scrollTimes = Array(scrollTracks).fill(0)
-  list.forEach(c=>{
-    if(!c.p) return
-    let p = c.p.split(',')
-    let mode = p[1]
-    if(mode!=="4" && mode!=="5"){
-      let minTrack = scrollTimes.indexOf(Math.min(...scrollTimes))
-      let t = parseFloat(p[0])||0
-      t = Math.max(t, scrollTimes[minTrack])
-      scrollTimes[minTrack] = t
-      p[0] = t.toFixed(2)
-      if(p.length<8) p.push(minTrack)
-      else p[7]=minTrack
-      c.p = p.join(',')
-    }
-  })
-  return list
-}
-
-// =======================
-// 搜索
-// =======================
-async function searchDanmu(params){
-  const {title}=params
-  const servers=[params.server,params.server2,params.server3].filter(s=>s&&s.startsWith("http")).map(s=>s.replace(/\/$/,''))
-  let animes=[], mapEntries={}, seen=new Set()
-  const tasks=servers.map(async server=>{
-    try{
-      const res=await Widget.http.get(`${server}/api/v2/search/anime?keyword=${encodeURIComponent(title)}`)
-      const data=typeof res.data==="string"?JSON.parse(res.data):res.data
-      if(data?.animes){
-        for(const a of data.animes){
-          if(!seen.has(a.animeId)){
-            seen.add(a.animeId)
-            animes.push(a)
-            mapEntries[a.animeId]=server
+async function initDict(mode) {
+  if (!mode || mode === "none") return;
+  if (MEM_DICT) return; 
+  const key = `dict_${mode}`;
+  let local = await Widget.storage.get(key);
+  if (!local) {
+      try {
+          const res = await Widget.http.get(mode === "s2t" ? DICT_URL_S2T : DICT_URL_T2S);
+          let text = res.data || res;
+          if (typeof text === 'string' && text.length > 100) {
+              const map = {};
+              text.split('\n').forEach(l => {
+                  const p = l.split(/\s+/);
+                  if (p.length >= 2) map[p[0]] = p[1];
+              });
+              await Widget.storage.set(key, JSON.stringify(map));
+              MEM_DICT = map;
           }
-        }
+      } catch (e) {}
+  } else {
+      try { MEM_DICT = JSON.parse(local); } catch (e) {}
+  }
+}
+
+function convertText(text) {
+  if (!text || !MEM_DICT) return text;
+  let res = "";
+  for (let char of text) { res += MEM_DICT[char] || char; }
+  return res;
+}
+
+// ==========================================
+// 2. 核心功能
+// ==========================================
+const SOURCE_KEY = "dm_source_map";
+
+async function getSource(id) {
+  try {
+      let map = await Widget.storage.get(SOURCE_KEY);
+      return map ? JSON.parse(map)[id] : null;
+  } catch(e) { return null; }
+}
+
+async function searchDanmu(params) {
+  const { title, season, searchBlockKeywords } = params;
+  const queryTitle = title;
+  
+  const servers = [params.server, params.server2, params.server3]
+      .filter(s => s && s.startsWith("http"))
+      .map(s => s.replace(/\/$/, ""));
+  
+  if (!servers.length) return { animes: [] };
+
+  let finalAnimes = [];
+  let mapEntries = {};
+  let seenIds = new Set(); 
+
+  // 【核心测试】使用 Promise.all 发起并发请求
+  const tasks = servers.map(async (server) => {
+      try {
+          const res = await Widget.http.get(`${server}/api/v2/search/anime?keyword=${queryTitle}`, {
+              headers: { 
+                  "Content-Type": "application/json", 
+                  "User-Agent": "ForwardWidgets/1.0.0" 
+              }
+          });
+          
+          if (res) {
+              const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+              if (data && data.success && data.animes && data.animes.length > 0) {
+                  return { server, animes: data.animes };
+              }
+          }
+      } catch (e) {
+          console.log("单个源请求错误:", e);
       }
-    }catch(e){}
-  })
-  await Promise.all(tasks)
-  try{
-    let mapStr=await Widget.storage.get(SOURCE_KEY)
-    let map=mapStr?JSON.parse(mapStr):{}
-    Object.assign(map,mapEntries)
-    await Widget.storage.set(SOURCE_KEY,JSON.stringify(map))
-  }catch(e){}
-  return {animes}
+      return null;
+  });
+
+  // 等待所有源并发请求完成
+  const results = await Promise.all(tasks);
+
+  // 汇集结果并去重
+  for (const res of results) {
+      if (res) {
+          for (const a of res.animes) {
+              // 多源去重
+              if (!seenIds.has(a.animeId)) {
+                  seenIds.add(a.animeId);
+                  finalAnimes.push(a);
+                  mapEntries[a.animeId] = res.server;
+              }
+          }
+      }
+  }
+
+  // 保存来源映射
+  try {
+      let mapStr = await Widget.storage.get(SOURCE_KEY);
+      let map = mapStr ? JSON.parse(mapStr) : {};
+      Object.assign(map, mapEntries);
+      await Widget.storage.set(SOURCE_KEY, JSON.stringify(map));
+  } catch (e) {}
+
+  // 搜索结果屏蔽词过滤
+  if (finalAnimes.length > 0 && searchBlockKeywords) {
+      const blockedList = searchBlockKeywords.split(/[,，]/).map(k => k.trim()).filter(k => k.length > 0);
+      if (blockedList.length > 0) {
+          finalAnimes = finalAnimes.filter(a => {
+              if (!a.animeTitle) return false;
+              for (const keyword of blockedList) {
+                  if (a.animeTitle.includes(keyword)) return false; 
+              }
+              return true;
+          });
+      }
+  }
+
+  // 排序逻辑 (绝不抛弃，只做优先排序)
+  if (finalAnimes.length > 0) {
+      let animes = finalAnimes;
+      if (season) {
+          const matchedAnimes = [];
+          const nonMatchedAnimes = [];
+          animes.forEach((anime) => {
+              if (matchSeason(anime, queryTitle, season) && !(queryTitle.includes("电影") || queryTitle.includes("movie"))) {
+                  matchedAnimes.push(anime);
+              } else {
+                  nonMatchedAnimes.push(anime);
+              }
+          });
+          animes = [...matchedAnimes, ...nonMatchedAnimes];
+      } else {
+          const matchedAnimes = [];
+          const nonMatchedAnimes = [];
+          animes.forEach((anime) => {
+              if (queryTitle.includes("电影") || queryTitle.includes("movie")) {
+                  matchedAnimes.push(anime);
+              } else {
+                  nonMatchedAnimes.push(anime);
+              }
+          });
+          animes = [...matchedAnimes, ...nonMatchedAnimes];
+      }
+      finalAnimes = animes;
+  }
+
+  return { animes: finalAnimes };
 }
 
-// =======================
-// 详情
-// =======================
-async function getDetailById(params){
-  const {animeId}=params
-  let server=(await getSource(animeId))||params.server
-  try{
-    const res=await Widget.http.get(`${server}/api/v2/bangumi/${animeId}`)
-    const data=typeof res.data==="string"?JSON.parse(res.data):res.data
-    if(data?.bangumi?.episodes){
-      let mapStr=await Widget.storage.get(SOURCE_KEY)
-      let map=mapStr?JSON.parse(mapStr):{}
-      for(const ep of data.bangumi.episodes) map[ep.episodeId]=server
-      await Widget.storage.set(SOURCE_KEY,JSON.stringify(map))
-      return data.bangumi.episodes
-    }
-  }catch(e){}
-  return []
+function matchSeason(anime, queryTitle, season) {
+  let res = false;
+  if (anime && anime.animeTitle && anime.animeTitle.includes(queryTitle)) {
+      const title = anime.animeTitle.split("(")[0].trim();
+      if (title.startsWith(queryTitle)) {
+          const afterTitle = title.substring(queryTitle.length).trim();
+          if (afterTitle === '' && season.toString() === "1") {
+              res = true;
+          }
+          const seasonIndex = afterTitle.match(/\d+/);
+          if (seasonIndex && seasonIndex[0].toString() === season.toString()) {
+              res = true;
+          }
+          const chineseNumber = afterTitle.match(/[一二三四五六七八九十壹贰叁肆伍陆柒捌玖拾]+/);
+          if (chineseNumber && convertChineseNumber(chineseNumber[0]).toString() === season.toString()) {
+              res = true;
+          }
+      }
+  }
+  return res;
 }
 
-// =======================
-// 获取弹幕
-// =======================
-async function getCommentsById(params){
-  const {commentId,colorMode,maxCount,blockKeywords}=params
-  if(!commentId) return null
-  let server=(await getSource(commentId))||params.server
-  try{
-    const res=await Widget.http.get(`${server}/api/v2/comment/${commentId}?withRelated=true`)
-    const data=typeof res.data==="string"?JSON.parse(res.data):res.data
-    let list=data.comments||[]
+function convertChineseNumber(chineseNumber) {
+  if (/^\d+$/.test(chineseNumber)) return Number(chineseNumber);
+  const digits = {
+      '零': 0, '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
+      '壹': 1, '貳': 2, '參': 3, '肆': 4, '伍': 5, '陸': 6, '柒': 7, '捌': 8, '玖': 9
+  };
+  const units = { '十': 10, '百': 100, '千': 1000, '拾': 10, '佰': 100, '仟': 1000 };
+  let result = 0, current = 0, lastUnit = 1;
 
-    list=autoSyncDanmu(list)
+  for (let i = 0; i < chineseNumber.length; i++) {
+      const char = chineseNumber[i];
+      if (digits[char] !== undefined) {
+          current = digits[char];
+      } else if (units[char] !== undefined) {
+          const unit = units[char];
+          if (current === 0) current = 1;
+          if (unit >= lastUnit) result = current * unit; else result += current * unit;
+          lastUnit = unit; current = 0;
+      }
+  }
+  if (current > 0) result += current;
+  return result;
+}
 
-    if(blockKeywords){
-      const blocked=blockKeywords.split(',').map(s=>s.trim())
-      list=list.filter(c=>{
-        let msg=c.m||""
-        for(let k of blocked) if(msg.includes(k)) return false
-        return true
-      })
-    }
+async function getDetailById(params) {
+  const { animeId } = params;
+  let server = (await getSource(animeId)) || params.server;
 
-    list=processAI(list)
-    boostClimax(list)
-    list=scheduleCenterDanmu(list)
-    list=scheduleScrollDanmu(list)
+  try {
+      const res = await Widget.http.get(`${server}/api/v2/bangumi/${animeId}`, {
+          headers: { "Content-Type": "application/json", "User-Agent": "ForwardWidgets/1.0.0" }
+      });
+      const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+      if (data?.bangumi?.episodes) {
+          let mapStr = await Widget.storage.get(SOURCE_KEY);
+          let map = mapStr ? JSON.parse(mapStr) : {};
+          for (const ep of data.bangumi.episodes) {
+              map[ep.episodeId] = server;
+          }
+          await Widget.storage.set(SOURCE_KEY, JSON.stringify(map));
+          return data.bangumi.episodes;
+      }
+  } catch (e) {}
+  return [];
+}
 
-    if(colorMode&&colorMode!=="none"){
-      const COLORS=["16711680","16776960","16744192","13445375"]
-      const WHITE="16777215"
-      list.forEach(c=>{
-        if(!c.p) return
-        let p=c.p.split(',')
-        if(colorMode==="white") p[3]=WHITE
-        else if(colorMode==="partial") p[3]=Math.random()<0.5?COLORS[Math.floor(Math.random()*COLORS.length)]:WHITE
-        else if(colorMode==="all") p[3]=COLORS[Math.floor(Math.random()*COLORS.length)]
-        c.p=p.join(',')
-      })
-    }
+async function getCommentsById(params) {
+  const { commentId, convertMode, blockKeywords, colorMode, maxCount } = params;
+  if (!commentId) return null;
 
-    let limit=parseInt(maxCount)||3000
-    if(list.length>limit) list=list.sort(()=>Math.random()-0.5).slice(0,limit)
+  await initDict(convertMode);
 
-    data.comments=list
-    return data
-  }catch(e){return null}
+  let server = (await getSource(commentId)) || params.server;
+
+  try {
+      const res = await Widget.http.get(`${server}/api/v2/comment/${commentId}?withRelated=true&chConvert=0`, {
+          headers: { "Content-Type": "application/json", "User-Agent": "ForwardWidgets/1.0.0" }
+      });
+      const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+      
+      let list = data.comments || [];
+
+      const blockedList = blockKeywords 
+          ? blockKeywords.split(/[,，]/).map(k => k.trim()).filter(k => k.length > 0) 
+          : [];
+
+      if (list.length > 0) {
+          if (convertMode !== "none" && MEM_DICT) {
+              list.forEach(c => {
+                  if (c.m) c.m = convertText(c.m);
+                  if (c.message) c.message = convertText(c.message);
+              });
+          }
+
+          if (blockedList.length > 0) {
+              list = list.filter(c => {
+                  const msg = c.m || c.message || "";
+                  for (const keyword of blockedList) {
+                      if (msg.includes(keyword)) return false; 
+                  }
+                  return true;
+              });
+          }
+
+          let limit = parseInt(maxCount);
+          if (!isNaN(limit) && limit > 0 && list.length > limit) {
+              for (let i = list.length - 1; i > 0; i--) {
+                  const j = Math.floor(Math.random() * (i + 1));
+                  [list[i], list[j]] = [list[j], list[i]];
+              }
+              list = list.slice(0, limit);
+              list.sort((a, b) => {
+                  let timeA = a.p ? parseFloat(a.p.split(',')[0]) || 0 : 0;
+                  let timeB = b.p ? parseFloat(b.p.split(',')[0]) || 0 : 0;
+                  return timeA - timeB;
+              });
+          }
+
+          if (colorMode && colorMode !== "none") {
+              const COLORS = [
+                  16711680, 16776960, 16752384, 16738740, 13445375, 11730943, 11730790
+              ];
+              const COLOR_WHITE = "16777215";
+
+              list.forEach(c => {
+                  if (c.p) {
+                      let parts = c.p.split(',');
+                      if (parts.length >= 3) {
+                          let colorIndex = parts.length >= 8 ? 3 : 2; 
+
+                          let targetColor = COLOR_WHITE;
+                          if (colorMode === "white") {
+                              targetColor = COLOR_WHITE;
+                          } else if (colorMode === "partial") {
+                              targetColor = Math.random() < 0.5 
+                                  ? COLORS[Math.floor(Math.random() * COLORS.length)].toString() 
+                                  : COLOR_WHITE;
+                          } else if (colorMode === "all") {
+                              targetColor = COLORS[Math.floor(Math.random() * COLORS.length)].toString();
+                          }
+                          
+                          parts[colorIndex] = targetColor;
+                          c.p = parts.join(',');
+                      }
+                  }
+              });
+          }
+          
+          data.comments = list;
+      }
+      
+      return data;
+  } catch (e) { return null; }
 }
