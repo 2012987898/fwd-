@@ -1,10 +1,10 @@
 WidgetMetadata = {
   id: "danmu_api_Max_binfa",
   title: "并发弹幕",
-  version: "1.2.8", // 新增顶部弹幕支持
+  version: "1.2.8", // 新增居中弹幕功能
   requiredVersion: "0.0.2",
   site: "https://t.me/MakkaPakkaOvO",
-  description: "并发搜索多api、繁简互转、数量限制、关键词屏蔽、颜色重写、顶部弹幕",
+  description: "并发搜索多api、繁简互转、数量限制、关键词屏蔽、颜色重写、居中弹幕",
   author: "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖",
   
   globalParams: [
@@ -53,6 +53,18 @@ WidgetMetadata = {
           title: "🚫 弹幕内容屏蔽词 (逗号分隔)", 
           type: "input", 
           value: "" 
+      },
+      // 【新增】居中弹幕配置参数
+      { 
+          name: "positionMode", 
+          title: "📍 弹幕位置", 
+          type: "enumeration", 
+          value: "none",
+          enumOptions: [
+              { title: "保持原样", value: "none" },
+              { title: "全部居中", value: "center" }
+          ],
+          description: "设置弹幕显示位置，居中为屏幕水平居中显示"
       }
   ],
   modules: [
@@ -61,14 +73,12 @@ WidgetMetadata = {
       { id: "getComments", title: "弹幕", functionName: "getCommentsById", type: "danmu", params: [] }
   ]
 };
-
 // ==========================================
 // 1. 繁简转换核心
 // ==========================================
 const DICT_URL_S2T = "https://cdn.jsdelivr.net/npm/opencc-data@1.0.3/data/STCharacters.txt";
 const DICT_URL_T2S = "https://cdn.jsdelivr.net/npm/opencc-data@1.0.3/data/TSCharacters.txt";
 let MEM_DICT = null;
-
 async function initDict(mode) {
   if (!mode || mode === "none") return;
   if (MEM_DICT) return; 
@@ -92,26 +102,22 @@ async function initDict(mode) {
       try { MEM_DICT = JSON.parse(local); } catch (e) {}
   }
 }
-
 function convertText(text) {
   if (!text || !MEM_DICT) return text;
   let res = "";
   for (let char of text) { res += MEM_DICT[char] || char; }
   return res;
 }
-
 // ==========================================
 // 2. 核心功能
 // ==========================================
 const SOURCE_KEY = "dm_source_map";
-
 async function getSource(id) {
   try {
       let map = await Widget.storage.get(SOURCE_KEY);
       return map ? JSON.parse(map)[id] : null;
   } catch(e) { return null; }
 }
-
 async function searchDanmu(params) {
   const { title, season, searchBlockKeywords } = params;
   const queryTitle = title;
@@ -121,11 +127,10 @@ async function searchDanmu(params) {
       .map(s => s.replace(/\/$/, ""));
   
   if (!servers.length) return { animes: [] };
-
   let finalAnimes = [];
   let mapEntries = {};
   let seenIds = new Set(); 
-
+  // 【核心测试】使用 Promise.all 发起并发请求
   const tasks = servers.map(async (server) => {
       try {
           const res = await Widget.http.get(`${server}/api/v2/search/anime?keyword=${queryTitle}`, {
@@ -146,12 +151,13 @@ async function searchDanmu(params) {
       }
       return null;
   });
-
+  // 等待所有源并发请求完成
   const results = await Promise.all(tasks);
-
+  // 汇集结果并去重
   for (const res of results) {
       if (res) {
           for (const a of res.animes) {
+              // 多源去重
               if (!seenIds.has(a.animeId)) {
                   seenIds.add(a.animeId);
                   finalAnimes.push(a);
@@ -160,14 +166,14 @@ async function searchDanmu(params) {
           }
       }
   }
-
+  // 保存来源映射
   try {
       let mapStr = await Widget.storage.get(SOURCE_KEY);
       let map = mapStr ? JSON.parse(mapStr) : {};
       Object.assign(map, mapEntries);
       await Widget.storage.set(SOURCE_KEY, JSON.stringify(map));
   } catch (e) {}
-
+  // 搜索结果屏蔽词过滤
   if (finalAnimes.length > 0 && searchBlockKeywords) {
       const blockedList = searchBlockKeywords.split(/[,，]/).map(k => k.trim()).filter(k => k.length > 0);
       if (blockedList.length > 0) {
@@ -180,7 +186,7 @@ async function searchDanmu(params) {
           });
       }
   }
-
+  // 排序逻辑 (绝不抛弃，只做优先排序)
   if (finalAnimes.length > 0) {
       let animes = finalAnimes;
       if (season) {
@@ -208,10 +214,8 @@ async function searchDanmu(params) {
       }
       finalAnimes = animes;
   }
-
   return { animes: finalAnimes };
 }
-
 function matchSeason(anime, queryTitle, season) {
   let res = false;
   if (anime && anime.animeTitle && anime.animeTitle.includes(queryTitle)) {
@@ -233,7 +237,6 @@ function matchSeason(anime, queryTitle, season) {
   }
   return res;
 }
-
 function convertChineseNumber(chineseNumber) {
   if (/^\d+$/.test(chineseNumber)) return Number(chineseNumber);
   const digits = {
@@ -242,7 +245,6 @@ function convertChineseNumber(chineseNumber) {
   };
   const units = { '十': 10, '百': 100, '千': 1000, '拾': 10, '佰': 100, '仟': 1000 };
   let result = 0, current = 0, lastUnit = 1;
-
   for (let i = 0; i < chineseNumber.length; i++) {
       const char = chineseNumber[i];
       if (digits[char] !== undefined) {
@@ -257,11 +259,9 @@ function convertChineseNumber(chineseNumber) {
   if (current > 0) result += current;
   return result;
 }
-
 async function getDetailById(params) {
   const { animeId } = params;
   let server = (await getSource(animeId)) || params.server;
-
   try {
       const res = await Widget.http.get(`${server}/api/v2/bangumi/${animeId}`, {
           headers: { "Content-Type": "application/json", "User-Agent": "ForwardWidgets/1.0.0" }
@@ -279,18 +279,12 @@ async function getDetailById(params) {
   } catch (e) {}
   return [];
 }
-
-// ==========================================
-// 3. 弹幕获取 + 顶部弹幕支持
-// ==========================================
 async function getCommentsById(params) {
-  const { commentId, convertMode, blockKeywords, colorMode, maxCount } = params;
+  // 【新增】解构获取位置配置参数
+  const { commentId, convertMode, blockKeywords, colorMode, maxCount, positionMode } = params;
   if (!commentId) return null;
-
   await initDict(convertMode);
-
   let server = (await getSource(commentId)) || params.server;
-
   try {
       const res = await Widget.http.get(`${server}/api/v2/comment/${commentId}?withRelated=true&chConvert=0`, {
           headers: { "Content-Type": "application/json", "User-Agent": "ForwardWidgets/1.0.0" }
@@ -298,21 +292,18 @@ async function getCommentsById(params) {
       const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
       
       let list = data.comments || [];
-
       const blockedList = blockKeywords 
           ? blockKeywords.split(/[,，]/).map(k => k.trim()).filter(k => k.length > 0) 
           : [];
-
       if (list.length > 0) {
-          // 繁简转换
+          // 1. 繁简转换
           if (convertMode !== "none" && MEM_DICT) {
               list.forEach(c => {
                   if (c.m) c.m = convertText(c.m);
                   if (c.message) c.message = convertText(c.message);
               });
           }
-
-          // 内容屏蔽
+          // 2. 弹幕内容屏蔽
           if (blockedList.length > 0) {
               list = list.filter(c => {
                   const msg = c.m || c.message || "";
@@ -322,8 +313,7 @@ async function getCommentsById(params) {
                   return true;
               });
           }
-
-          // 数量限制 + 随机剔除
+          // 3. 数量限制
           let limit = parseInt(maxCount);
           if (!isNaN(limit) && limit > 0 && list.length > limit) {
               for (let i = list.length - 1; i > 0; i--) {
@@ -337,40 +327,48 @@ async function getCommentsById(params) {
                   return timeA - timeB;
               });
           }
-
-          // 弹幕颜色
+          // 4. 颜色重写
           if (colorMode && colorMode !== "none") {
               const COLORS = [
                   16711680, 16776960, 16752384, 16738740, 13445375, 11730943, 11730790
               ];
               const COLOR_WHITE = "16777215";
-
               list.forEach(c => {
                   if (c.p) {
                       let parts = c.p.split(',');
                       if (parts.length >= 3) {
                           let colorIndex = parts.length >= 8 ? 3 : 2; 
                           let targetColor = COLOR_WHITE;
-                          if (colorMode === "white") targetColor = COLOR_WHITE;
-                          else if (colorMode === "partial")
+                          if (colorMode === "white") {
+                              targetColor = COLOR_WHITE;
+                          } else if (colorMode === "partial") {
                               targetColor = Math.random() < 0.5 
                                   ? COLORS[Math.floor(Math.random() * COLORS.length)].toString() 
                                   : COLOR_WHITE;
-                          else if (colorMode === "all")
+                          } else if (colorMode === "all") {
                               targetColor = COLORS[Math.floor(Math.random() * COLORS.length)].toString();
+                          }
                           parts[colorIndex] = targetColor;
                           c.p = parts.join(',');
                       }
                   }
               });
           }
-
-          // 随机标记部分顶部弹幕
-          const topCount = Math.min(5, list.length); // 顶部最多 5 条
-          for (let i = 0; i < topCount; i++) {
-              list[i].position = "top";
+          // 【新增】5. 居中弹幕核心逻辑
+          // 弹幕p参数格式：[时间,模式,颜色,位置...]，模式为1=滚动，5=居中，4=固定
+          if (positionMode && positionMode === "center") {
+              list.forEach(c => {
+                  if (c.p) {
+                      let parts = c.p.split(',');
+                      if (parts.length >= 2) {
+                          // 将弹幕模式改为5（居中），兼容所有弹幕源的参数格式
+                          parts[1] = "5";
+                          c.p = parts.join(',');
+                      }
+                  }
+              });
           }
-
+          
           data.comments = list;
       }
       
